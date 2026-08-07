@@ -31,7 +31,7 @@ def fetch_filing_text(url: str) -> str:
         return ""
     try:
         resp = requests.get(url, headers=config.HTTP_HEADERS,
-                            timeout=config.HTTP_TIMEOUT)
+                            timeout=config.HTTP_TIMEOUT_PDF)
         if not resp.ok or len(resp.content) > _MAX_BYTES:
             return ""
         ctype = resp.headers.get("Content-Type", "").lower()

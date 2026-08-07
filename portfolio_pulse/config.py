@@ -102,7 +102,13 @@ HTTP_HEADERS = {
     "Accept": "application/rss+xml, application/xml, text/xml, */*",
     "Accept-Language": "en-US,en;q=0.9",
 }
-HTTP_TIMEOUT = 20  # seconds
+HTTP_TIMEOUT = 20  # seconds (feeds)
+HTTP_TIMEOUT_PDF = 8  # filing-document downloads — datacenter IPs get throttled,
+                      # so keep this tight; a slow PDF just falls back to the blurb
+# A single poll spends at most this long on the filing loop, then leaves the rest
+# for the next tick (unprocessed items are NOT marked seen, so nothing is lost).
+# Keeps every run well under the workflow's 10-minute ceiling.
+FILING_POLL_BUDGET_SEC = 300
 
 # --------------------------------------------------------------------------- #
 # News feeds — verified-source whitelist. Anything not on this list is dropped,

@@ -127,21 +127,40 @@ def parse_feed(feed_name: str, feed_url: str, symbol_names: dict[str, str]) -> l
     return items
 
 
-def poll(store, symbol_names: dict[str, str],
-         feeds: Optional[dict[str, str]] = None) -> list[FilingItem]:
-    """Poll all NSE filing feeds and return only newly-seen matched items.
+def mark_seen(store, item: "FilingItem") -> None:
+    """Persist a filing's dedup key. Called by the job AFTER the item is handled
+    (delivered/muted/deduped) so a mid-poll timeout never loses an undelivered
+    alert — unprocessed items simply reappear on the next poll."""
+    store.mark_seen(
+        item.guid, item.symbol, item.source_type, item.subject or item.company,
+        item.link, item.published_at.isoformat() if item.published_at else None,
+    )
 
-    Dedup is enforced via store.mark_seen(guid): an item already recorded (this
-    run or a prior run) is skipped, so each filing alerts exactly once.
+
+def poll(store, symbol_names: dict[str, str],
+         feeds: Optional[dict[str, str]] = None,
+         mark: bool = True) -> list[FilingItem]:
+    """Poll all NSE filing feeds and return matched items not yet seen.
+
+    mark=True (default): persist each item's dedup key as it's discovered.
+    mark=False: only filter out already-seen items (and de-dup within this
+    batch) WITHOUT persisting — the caller marks each seen after handling it,
+    so an interrupted poll leaves undelivered items to retry next time.
     """
     feeds = feeds or config.NSE_RSS_FEEDS
     fresh: list[FilingItem] = []
+    batch: set[str] = set()
     for feed_name, url in feeds.items():
         for item in parse_feed(feed_name, url, symbol_names):
-            is_new = store.mark_seen(
-                item.guid, item.symbol, item.source_type, item.subject or item.company,
-                item.link, item.published_at.isoformat() if item.published_at else None,
-            )
-            if is_new:
+            if mark:
+                if store.mark_seen(
+                        item.guid, item.symbol, item.source_type,
+                        item.subject or item.company, item.link,
+                        item.published_at.isoformat() if item.published_at else None):
+                    fresh.append(item)
+            else:
+                if item.guid in batch or store.is_seen(item.guid):
+                    continue
+                batch.add(item.guid)
                 fresh.append(item)
     return fresh

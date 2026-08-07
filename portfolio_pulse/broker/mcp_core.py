@@ -44,7 +44,7 @@ class MCPHTTPClient:
         return {}
 
     # -- plumbing ------------------------------------------------------------
-    def _post(self, payload: dict, timeout: int = 30) -> Optional[dict]:
+    def _post(self, payload: dict, timeout: int = 12) -> Optional[dict]:
         headers = {
             "Content-Type": "application/json",
             "Accept": "application/json, text/event-stream",

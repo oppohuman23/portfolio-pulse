@@ -104,17 +104,35 @@ def parse_feed(feed_name: str, feed_url: str,
     return items
 
 
+def mark_seen(store, item: "NewsItem") -> None:
+    """Persist a news item's dedup key (called after the item is handled)."""
+    store.mark_seen(
+        item.guid, item.symbol, item.source_type, item.title, item.link,
+        item.published_at.isoformat() if item.published_at else None,
+    )
+
+
 def poll(store, symbol_names: dict[str, str],
-         feeds: Optional[dict[str, str]] = None) -> list[NewsItem]:
-    """Poll all news feeds and return only newly-seen, whitelisted, matched items."""
+         feeds: Optional[dict[str, str]] = None,
+         mark: bool = True) -> list[NewsItem]:
+    """Poll all news feeds and return whitelisted, matched, not-yet-seen items.
+
+    mark=False leaves marking to the caller (see nse_rss.poll for the rationale).
+    """
     feeds = feeds or config.NEWS_RSS_FEEDS
     fresh: list[NewsItem] = []
+    batch: set[str] = set()
     for feed_name, url in feeds.items():
         for item in parse_feed(feed_name, url, symbol_names):
-            is_new = store.mark_seen(
-                item.guid, item.symbol, item.source_type, item.title, item.link,
-                item.published_at.isoformat() if item.published_at else None,
-            )
-            if is_new:
+            if mark:
+                if store.mark_seen(
+                        item.guid, item.symbol, item.source_type, item.title,
+                        item.link,
+                        item.published_at.isoformat() if item.published_at else None):
+                    fresh.append(item)
+            else:
+                if item.guid in batch or store.is_seen(item.guid):
+                    continue
+                batch.add(item.guid)
                 fresh.append(item)
     return fresh

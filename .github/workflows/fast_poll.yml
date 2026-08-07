@@ -7,16 +7,21 @@ name: fast-poll
 # minutes are unlimited there; all secrets stay in GitHub Secrets, never in code),
 # or widen the interval to '*/15'. See README "Hosting".
 on:
-  schedule:
-    # Off-peak minute offsets — GitHub throttles/drops crons on the congested
-    # :00/:10/:20... slots hardest; odd offsets measurably improve delivery.
-    # GH cron remains best-effort: expect ~10-20 min typical, worse at peak.
-    - cron: "4,14,24,34,44,54 2-18 * * *"
+  # The cron-job.org pinger (workflow_dispatch) is the single on-time driver.
+  # A GitHub schedule at the same minutes used to double-fire into the one
+  # concurrency group every cycle, cancelling one of the pair — those were the
+  # phantom "failed" runs. A sparse hourly fallback stays, off the pinger's
+  # :04/:14/... minutes so it can't collide, in case the pinger ever dies.
   workflow_dispatch:
+  schedule:
+    - cron: "37 2-18 * * *"
 
 concurrency:
   group: pulse-fast-poll
-  cancel-in-progress: false
+  # Newest poll wins — a stuck/queued run never blocks a fresh one. Safe because
+  # items are marked seen only after delivery, so a cancelled mid-run poll loses
+  # nothing (its undelivered items reappear next tick).
+  cancel-in-progress: true
 
 jobs:
   poll:

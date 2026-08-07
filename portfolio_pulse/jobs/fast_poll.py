@@ -60,32 +60,39 @@ def run() -> dict:
               "filings": 0, "news": 0, "commands": 0}
 
     if symbol_names:
+        import time as _time
+
+        from portfolio_pulse import config as _cfg
         from portfolio_pulse.ingest.matching import mention_is_attributive
         from portfolio_pulse.summarize.source_text import fetch_filing_text
 
-        from portfolio_pulse import config as _cfg
+        deadline = _time.monotonic() + _cfg.FILING_POLL_BUDGET_SEC
 
-        for item in nse_rss.poll(store, symbol_names):
-            # Routine paperwork (share-certificate notices, compliance reports,
-            # newspaper copies) is muted — recorded as seen, never alerted.
-            if _cfg.MUTE_ROUTINE and any(
-                    k in (item.subject or "").lower() for k in _cfg.NSE_ROUTINE_SUBJECTS):
-                counts["filings_muted"] = counts.get("filings_muted", 0) + 1
+        # Items are marked seen only AFTER handling, so hitting the budget just
+        # defers the rest to the next poll — no alert is ever lost to a timeout.
+        for item in nse_rss.poll(store, symbol_names, mark=False):
+            if _time.monotonic() > deadline:
+                counts["deferred"] = counts.get("deferred", 0) + 1
                 continue
-            # One event = one alert: NSE files a PDF + XBRL twin of most events
-            # minutes apart; suppress the twin. (Order wins are exempt — two
-            # genuine orders in a day must both alert.)
+            subject = (item.subject or "").lower()
+            if _cfg.MUTE_ROUTINE and any(k in subject for k in _cfg.NSE_ROUTINE_SUBJECTS):
+                counts["filings_muted"] = counts.get("filings_muted", 0) + 1
+                nse_rss.mark_seen(store, item)
+                continue
+            # One event = one alert: NSE files a PDF + XBRL twin minutes apart.
             title = f"{item.company}: {item.subject}" if item.subject else item.company
             if item.category != "Order/Contract Win" and \
                     recently_alerted(store, item.symbol, title):
                 counts["filings_deduped"] = counts.get("filings_deduped", 0) + 1
+                nse_rss.mark_seen(store, item)
                 continue
-            # Read the actual filing document so the summary can carry its
-            # substance (order values, dividend amounts) — not just the blurb.
-            doc = fetch_filing_text(item.link)
+            # Read the filing PDF for substance — but skip it when the budget is
+            # nearly spent (degrade to the RSS blurb rather than risk a timeout).
             body = item.description
-            if doc:
-                body += "\n\nFILING DOCUMENT TEXT:\n" + doc
+            if _time.monotonic() < deadline - 30:
+                doc = fetch_filing_text(item.link)
+                if doc:
+                    body += "\n\nFILING DOCUMENT TEXT:\n" + doc
             deliver(
                 store, symbol=item.symbol, alert_type="filing", title=title,
                 source_text=body, source_url=item.link,
@@ -93,14 +100,17 @@ def run() -> dict:
                 category=item.category,
             )
             counts["filings"] += 1
+            nse_rss.mark_seen(store, item)
 
-        for item in news_rss.poll(store, symbol_names):
+        for item in news_rss.poll(store, symbol_names, mark=False):
+            if _time.monotonic() > deadline:
+                counts["deferred"] = counts.get("deferred", 0) + 1
+                continue
             company = symbol_names.get(item.symbol, item.symbol)
             blob = f"{item.title} {item.description}"
-            # Keyless noise gate: company quoted as analyst/brokerage on OTHER
-            # stocks ('Nuvama maintains buy on X') is not news about them.
             if mention_is_attributive(blob, company):
                 counts["news_dropped"] = counts.get("news_dropped", 0) + 1
+                news_rss.mark_seen(store, item)
                 continue
             sent = deliver(
                 store, symbol=item.symbol, alert_type="news",
@@ -108,10 +118,9 @@ def run() -> dict:
                 source_url=item.link, source_type=item.source_type,
                 company=company, require_relevance=True,
             )
-            if sent is None:
-                counts["news_dropped"] = counts.get("news_dropped", 0) + 1
-            else:
-                counts["news"] += 1
+            counts["news_dropped" if sent is None else "news"] = \
+                counts.get("news_dropped" if sent is None else "news", 0) + 1
+            news_rss.mark_seen(store, item)
 
     counts["commands"] = telegram.drain_commands(store)
     return counts
